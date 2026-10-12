@@ -59,5 +59,38 @@
       </description>
     </key>
 
+    <key name="fill-screen" type="b">
+      <default>false</default>
+      <summary>Fill the whole screen</summary>
+      <description>
+        When true the video is zoomed (keeping its aspect ratio) until it
+        covers the entire monitor, cropping the parts that do not fit.
+      </description>
+    </key>
+
+    <key name="background-mode" type="s">
+      <choices>
+        <choice value="color"/>
+        <choice value="edge"/>
+        <choice value="blur"/>
+      </choices>
+      <default>'color'</default>
+      <summary>Background of the bars around the video</summary>
+      <description>
+        How to fill the area not covered by the video: 'color' uses
+        background-color, 'edge' extends the video's border pixels and
+        'blur' shows a blurred copy of the video.
+      </description>
+    </key>
+
+    <key name="background-color" type="s">
+      <default>'#000000'</default>
+      <summary>Background color</summary>
+      <description>
+        Color (#RRGGBB) of the bars around the video when background-mode
+        is 'color'.
+      </description>
+    </key>
+
   </schema>
 </schemalist>
