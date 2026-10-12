@@ -31,6 +31,11 @@ const LOGIN_DBUS_NAME = 'org.freedesktop.login1';
 const LOGIN_DBUS_PATH = '/org/freedesktop/login1';
 const LOGIN_DBUS_IFACE = 'org.freedesktop.login1.Manager';
 
+// Async file APIs, so disk access never blocks the Shell's main thread
+Gio._promisify(Gio.File.prototype, 'enumerate_children_async');
+Gio._promisify(Gio.FileEnumerator.prototype, 'next_files_async');
+Gio._promisify(Gio.FileEnumerator.prototype, 'close_async');
+
 // ─── Top-bar Indicator ────────────────────────────────────────────────────────
 
 const VideoScreensaverIndicator = GObject.registerClass(
@@ -247,6 +252,7 @@ export default class VideoScreensaverExtension extends Extension {
         this._settingsChangedId = null;
         this._indicator = null;
         this._locking = false;
+        this._cancellable = null;
 
         this._markerFile = GLib.build_filenamev([
             GLib.get_user_runtime_dir(), 'video-screensaver.pid',
@@ -414,7 +420,10 @@ export default class VideoScreensaverExtension extends Extension {
         // Overlay actors are created lazily in _showError() if mpv fails to
         // launch, so the user always sees a meaningful error message.
 
-        this._startPlayer();
+        this._cancellable = new Gio.Cancellable();
+        this._startPlayer(this._cancellable).catch(e => {
+            console.error('[VideoScreensaver] Failed to start player:', e.message);
+        });
         this._connectInputSignals();
     }
 
@@ -423,6 +432,10 @@ export default class VideoScreensaverExtension extends Extension {
             return;
 
         this._screensaverActive = false;
+
+        // Abort a folder listing that may still be running
+        this._cancellable?.cancel();
+        this._cancellable = null;
 
         this._disconnectInputSignals();
 
@@ -442,7 +455,14 @@ export default class VideoScreensaverExtension extends Extension {
 
     // ── Player management ────────────────────────────────────────────────────
 
-    _startPlayer() {
+    /**
+     * List the videos folder asynchronously and launch mpv. A slow or hung
+     * disk/network folder never freezes the Shell; if the screensaver is
+     * dismissed meanwhile, `cancellable` aborts the listing.
+     *
+     * @param {Gio.Cancellable} cancellable
+     */
+    async _startPlayer(cancellable) {
         const folderPath = this._settings.get_string('videos-folder');
 
         if (!folderPath || folderPath.trim() === '') {
@@ -450,12 +470,24 @@ export default class VideoScreensaverExtension extends Extension {
             return;
         }
 
-        if (!GLib.file_test(folderPath, GLib.FileTest.IS_DIR)) {
-            this._showError(_('Videos folder not found.'), folderPath);
-            return;
+        let videoFiles;
+        try {
+            videoFiles = await this._listVideoFiles(folderPath, cancellable);
+        } catch (e) {
+            if (e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
+            if (e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND) ||
+                e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_DIRECTORY)) {
+                this._showError(_('Videos folder not found.'), folderPath);
+                return;
+            }
+            console.error('[VideoScreensaver] Error listing videos folder:', e.message);
+            videoFiles = [];
         }
 
-        const videoFiles = this._listVideoFiles(folderPath);
+        // Dismissed (or extension disabled) while the folder was being listed
+        if (cancellable.is_cancelled())
+            return;
 
         if (videoFiles.length === 0) {
             this._showError(_('No video files found in folder.'), folderPath);
@@ -469,31 +501,38 @@ export default class VideoScreensaverExtension extends Extension {
      * Enumerate all video files inside folderPath and return their absolute
      * paths sorted alphabetically. Supported extensions: mp4, mkv, webm, avi,
      * mov, m4v.
+     *
+     * @param {string} folderPath
+     * @param {Gio.Cancellable} cancellable
+     * @returns {Promise<string[]>}
      */
-    _listVideoFiles(folderPath) {
+    async _listVideoFiles(folderPath, cancellable) {
         const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v'];
         const dir = Gio.File.new_for_path(folderPath);
         const files = [];
 
-        try {
-            const enumerator = dir.enumerate_children(
-                'standard::name,standard::type',
-                Gio.FileQueryInfoFlags.NONE,
-                null
-            );
+        const enumerator = await dir.enumerate_children_async(
+            'standard::name,standard::type',
+            Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_DEFAULT,
+            cancellable
+        );
 
-            let fileInfo;
-            while ((fileInfo = enumerator.next_file(null)) !== null) {
-                if (fileInfo.get_file_type() !== Gio.FileType.REGULAR)
-                    continue;
-                const name = fileInfo.get_name();
-                const lower = name.toLowerCase();
-                if (VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext)))
-                    files.push(GLib.build_filenamev([folderPath, name]));
+        try {
+            let infos;
+            while ((infos = await enumerator.next_files_async(
+                50, GLib.PRIORITY_DEFAULT, cancellable)).length > 0) {
+                for (const fileInfo of infos) {
+                    if (fileInfo.get_file_type() !== Gio.FileType.REGULAR)
+                        continue;
+                    const name = fileInfo.get_name();
+                    const lower = name.toLowerCase();
+                    if (VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext)))
+                        files.push(GLib.build_filenamev([folderPath, name]));
+                }
             }
-            enumerator.close(null);
-        } catch (e) {
-            console.error('[VideoScreensaver] Error listing videos folder:', e.message);
+        } finally {
+            enumerator.close_async(GLib.PRIORITY_DEFAULT, null).catch(() => {});
         }
 
         files.sort();
