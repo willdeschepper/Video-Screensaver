@@ -77,8 +77,9 @@ SOURCE_FILES=(
     extension.js
     prefs.js
     stylesheet.css
+    edge-fill.lua
 )
-SOURCE_SCHEMA="schemas/org.gnome.shell.extensions.video-screensaver.gschema.xml"
+SOURCE_SCHEMA="schemas/org.gnome.shell.extensions.movie-screensaver.gschema.xml"
 
 for f in "${SOURCE_FILES[@]}"; do
     if [[ ! -f "${SCRIPT_DIR}/${f}" ]]; then
@@ -156,9 +157,9 @@ echo "  2. Enable the extension (if not done automatically):"
 echo "       gnome-extensions enable ${UUID}"
 echo "       – or use GNOME Extensions / Extensions Manager app"
 echo ""
-echo "  3. Set your video file:"
+echo "  3. Set your videos folder:"
 echo "       gsettings --schemadir ${EXT_DIR}/schemas \\"
-echo "         set ${SCHEMA_ID} video-path '/path/to/your/video.mp4'"
+echo "         set ${SCHEMA_ID} videos-folder '/path/to/your/videos'"
 echo ""
 echo "  4. Set idle timeout (minutes, 0 = off):"
 echo "       gsettings --schemadir ${EXT_DIR}/schemas \\"

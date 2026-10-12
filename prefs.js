@@ -159,6 +159,66 @@ export default class VideoScreensaverPreferences extends ExtensionPreferences {
         settings.bind('shuffle-videos', shuffleRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         videoGroup.add(shuffleRow);
 
+        // Fill screen (crop)
+        const fillRow = new Adw.SwitchRow({
+            title: _('Fill screen'),
+            subtitle: _('Zoom the video to cover the whole monitor, cropping the edges (ideal for ultrawide)'),
+        });
+        settings.bind('fill-screen', fillRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        videoGroup.add(fillRow);
+
+        // Background of the bars around the video
+        const BACKGROUND_MODES = ['color', 'edge', 'blur'];
+        const backgroundRow = new Adw.ComboRow({
+            title: _('Background'),
+            subtitle: _('What to show around videos that do not fill the screen'),
+            model: Gtk.StringList.new([
+                _('Solid color'),
+                _('Extend video edges'),
+                _('Blurred video'),
+            ]),
+            selected: Math.max(0, BACKGROUND_MODES.indexOf(settings.get_string('background-mode'))),
+        });
+        backgroundRow.connect('notify::selected', row => {
+            settings.set_string('background-mode', BACKGROUND_MODES[row.selected]);
+        });
+        settings.connect('changed::background-mode', s => {
+            const idx = BACKGROUND_MODES.indexOf(s.get_string('background-mode'));
+            if (idx >= 0 && backgroundRow.selected !== idx)
+                backgroundRow.selected = idx;
+        });
+        videoGroup.add(backgroundRow);
+
+        // Solid background color
+        const colorButton = new Gtk.ColorDialogButton({
+            dialog: new Gtk.ColorDialog({with_alpha: false}),
+            valign: Gtk.Align.CENTER,
+        });
+        const rgba = new Gdk.RGBA();
+        rgba.parse(settings.get_string('background-color'));
+        colorButton.rgba = rgba;
+        colorButton.connect('notify::rgba', button => {
+            settings.set_string('background-color', _rgbaToHex(button.rgba));
+        });
+        const colorRow = new Adw.ActionRow({
+            title: _('Background color'),
+            subtitle: _('Color of the bars, e.g. white for videos with a white background'),
+        });
+        colorRow.add_suffix(colorButton);
+        colorRow.activatable_widget = colorButton;
+        const updateColorRow = () => {
+            colorRow.visible = settings.get_string('background-mode') === 'color';
+        };
+        settings.connect('changed::background-mode', updateColorRow);
+        updateColorRow();
+        videoGroup.add(colorRow);
+
+        // Background settings have no effect while the video fills the screen
+        settings.bind('fill-screen', backgroundRow, 'sensitive',
+            Gio.SettingsBindFlags.GET | Gio.SettingsBindFlags.INVERT_BOOLEAN);
+        settings.bind('fill-screen', colorRow, 'sensitive',
+            Gio.SettingsBindFlags.GET | Gio.SettingsBindFlags.INVERT_BOOLEAN);
+
         const pathRow = new Adw.EntryRow({
             title: _('Videos folder path'),
             text: settings.get_string('videos-folder'),
@@ -366,6 +426,16 @@ export default class VideoScreensaverPreferences extends ExtensionPreferences {
 }
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
+
+/**
+ * Convert a Gdk.RGBA to a "#rrggbb" string.
+ * @param {Gdk.RGBA} rgba
+ * @returns {string}
+ */
+function _rgbaToHex(rgba) {
+    const hex = v => Math.round(v * 255).toString(16).padStart(2, '0');
+    return `#${hex(rgba.red)}${hex(rgba.green)}${hex(rgba.blue)}`;
+}
 
 /**
  * Copy text to the system clipboard using the GTK4 ContentProvider API.

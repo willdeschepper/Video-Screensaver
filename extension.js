@@ -544,6 +544,8 @@ export default class VideoScreensaverExtension extends Extension {
                 ...(screenIdx > 0 ? ['--mute=yes'] : []),
                 // Randomise playback order when the user enabled shuffle
                 ...(shuffle ? ['--shuffle'] : []),
+                // Fill-screen / background of the bars around the video
+                ...this._displayArgs(Main.layoutManager.monitors[screenIdx]),
                 // Separator before positional file arguments
                 '--',
                 ...videoPaths,
@@ -599,6 +601,37 @@ export default class VideoScreensaverExtension extends Extension {
                 );
                 return;
             }
+        }
+    }
+
+    /**
+     * mpv arguments for the fill-screen and background settings.
+     *
+     * @param {object} monitor - Monitor geometry (used for its aspect ratio).
+     * @returns {string[]}
+     */
+    _displayArgs(monitor) {
+        // Zoom until the video covers the screen, cropping what overflows
+        if (this._settings.get_boolean('fill-screen'))
+            return ['--panscan=1.0'];
+
+        switch (this._settings.get_string('background-mode')) {
+        case 'blur':
+            return ['--border-background=blur'];
+        case 'edge':
+            return [
+                // Software filters need frames copied back from the GPU
+                '--hwdec=auto-copy',
+                `--script=${GLib.build_filenamev([this.path, 'edge-fill.lua'])}`,
+                `--script-opts=edge_fill-aspect=${monitor.width / monitor.height}`,
+            ];
+        default: {
+            const color = this._settings.get_string('background-color');
+            // Black is mpv's default: keep the original command line
+            if (color.toLowerCase() === '#000000')
+                return [];
+            return ['--border-background=color', `--background-color=${color}`];
+        }
         }
     }
 
