@@ -590,6 +590,9 @@ export default class VideoScreensaverExtension extends Extension {
                 '--no-border',
                 '--ontop',
                 '--hwdec=auto',
+                // Don't inhibit idle: GNOME can still blank the screen and
+                // suspend as configured in Settings → Power
+                '--stop-screensaver=no',
                 // Disable all mpv keyboard/mouse bindings so keys like ESC and
                 // 'q' never exit fullscreen on their own. Dismissal is handled
                 // exclusively by the Shell's idle-monitor user-active watch.
