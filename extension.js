@@ -262,6 +262,7 @@ export default class VideoScreensaverExtension extends Extension {
         this._idleMonitor = null;
         this._loginProxy = null;
         this._suspendSignalId = null;
+        this._shieldActiveId = null;
         this._settingsChangedId = null;
         this._indicator = null;
         this._locking = false;
@@ -278,6 +279,7 @@ export default class VideoScreensaverExtension extends Extension {
         // Non-critical setup: each step is isolated so a failure here does not
         // prevent the extension from reaching a functional enabled state.
         this._connectLogind();
+        this._connectScreenShield();
         this._applyIdleMonitor();
 
         this._settingsChangedId = this._settings.connect('changed', (_s, key) => {
@@ -312,6 +314,12 @@ export default class VideoScreensaverExtension extends Extension {
             this._removeIdleWatch();
         } catch (e) {
             if (DEBUG) console.warn('[VideoScreensaver] disable: idle watch removal error:', e.message);
+        }
+
+        // ── Screen shield ────────────────────────────────────────────────────
+        if (this._shieldActiveId) {
+            Main.screenShield?.disconnect(this._shieldActiveId);
+            this._shieldActiveId = null;
         }
 
         // ── Logind proxy ─────────────────────────────────────────────────────
@@ -415,6 +423,22 @@ export default class VideoScreensaverExtension extends Extension {
             this._suspendSignalId = null;
         }
         this._loginProxy = null;
+    }
+
+    // ── Screen blanking ──────────────────────────────────────────────────────
+
+    /**
+     * When GNOME blanks the screen (Settings → Power → Screen Blank) the
+     * screen shield becomes active: stop mpv so it does not keep decoding
+     * video behind a turned-off monitor. GNOME locks on its own if enabled.
+     */
+    _connectScreenShield() {
+        if (!Main.screenShield)
+            return;
+        this._shieldActiveId = Main.screenShield.connect('active-changed', shield => {
+            if (shield.active && this._screensaverActive)
+                this._stopScreensaver(false, true);
+        });
     }
 
     // ── Screensaver lifecycle ────────────────────────────────────────────────
