@@ -192,6 +192,14 @@ cropped, never stretched) or choose what the bars show:
 Non-black colors and the blurred background use `--border-background`, which
 requires **mpv 0.38 or newer** with the default `gpu-next` video output.
 
+### Screen blank and suspend
+
+The screensaver does not keep the computer awake. GNOME still follows
+**Settings → Power**: after the *Screen Blank* delay the screen turns off
+(and locks, if screen lock is enabled) and the video player is stopped; the
+computer suspends if *Automatic Suspend* is on. With *Screen Blank* set to
+*Never* the video plays until there is input.
+
 ### Supported video formats
 
 Any format supported by mpv is accepted. The extension looks for files with
