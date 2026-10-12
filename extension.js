@@ -31,6 +31,11 @@ const LOGIN_DBUS_NAME = 'org.freedesktop.login1';
 const LOGIN_DBUS_PATH = '/org/freedesktop/login1';
 const LOGIN_DBUS_IFACE = 'org.freedesktop.login1.Manager';
 
+// Async file APIs, so disk access never blocks the Shell's main thread
+Gio._promisify(Gio.File.prototype, 'enumerate_children_async');
+Gio._promisify(Gio.FileEnumerator.prototype, 'next_files_async');
+Gio._promisify(Gio.FileEnumerator.prototype, 'close_async');
+
 // ─── Top-bar Indicator ────────────────────────────────────────────────────────
 
 const VideoScreensaverIndicator = GObject.registerClass(
@@ -106,8 +111,17 @@ class VideoScreensaverIndicator extends PanelMenu.Button {
         this._slider.x_expand = true;
         this._slider.connect('notify::value', slider => {
             const minutes = Math.round(slider.value * 30);
-            settings.set_int('idle-timeout-minutes', minutes);
             timeoutLabel.label.text = _('Idle timeout: %d min').format(minutes);
+
+            // Save once the slider stops moving instead of on every pixel
+            if (this._saveTimeoutId)
+                GLib.source_remove(this._saveTimeoutId);
+            this._saveTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                this._saveTimeoutId = null;
+                if (settings.get_int('idle-timeout-minutes') !== minutes)
+                    settings.set_int('idle-timeout-minutes', minutes);
+                return GLib.SOURCE_REMOVE;
+            });
         });
         sliderItem.add_child(this._slider);
         this.menu.addMenuItem(sliderItem);
@@ -166,6 +180,10 @@ class VideoScreensaverIndicator extends PanelMenu.Button {
     }
 
     destroy() {
+        if (this._saveTimeoutId) {
+            GLib.source_remove(this._saveTimeoutId);
+            this._saveTimeoutId = null;
+        }
         if (this._settingsChangedId) {
             this._ext._getSettings().disconnect(this._settingsChangedId);
             this._settingsChangedId = null;
@@ -244,9 +262,11 @@ export default class VideoScreensaverExtension extends Extension {
         this._idleMonitor = null;
         this._loginProxy = null;
         this._suspendSignalId = null;
+        this._shieldActiveId = null;
         this._settingsChangedId = null;
         this._indicator = null;
         this._locking = false;
+        this._cancellable = null;
 
         this._markerFile = GLib.build_filenamev([
             GLib.get_user_runtime_dir(), 'video-screensaver.pid',
@@ -259,6 +279,7 @@ export default class VideoScreensaverExtension extends Extension {
         // Non-critical setup: each step is isolated so a failure here does not
         // prevent the extension from reaching a functional enabled state.
         this._connectLogind();
+        this._connectScreenShield();
         this._applyIdleMonitor();
 
         this._settingsChangedId = this._settings.connect('changed', (_s, key) => {
@@ -293,6 +314,12 @@ export default class VideoScreensaverExtension extends Extension {
             this._removeIdleWatch();
         } catch (e) {
             if (DEBUG) console.warn('[VideoScreensaver] disable: idle watch removal error:', e.message);
+        }
+
+        // ── Screen shield ────────────────────────────────────────────────────
+        if (this._shieldActiveId) {
+            Main.screenShield?.disconnect(this._shieldActiveId);
+            this._shieldActiveId = null;
         }
 
         // ── Logind proxy ─────────────────────────────────────────────────────
@@ -398,10 +425,31 @@ export default class VideoScreensaverExtension extends Extension {
         this._loginProxy = null;
     }
 
+    // ── Screen blanking ──────────────────────────────────────────────────────
+
+    /**
+     * When GNOME blanks the screen (Settings → Power → Screen Blank) the
+     * screen shield becomes active: stop mpv so it does not keep decoding
+     * video behind a turned-off monitor. GNOME locks on its own if enabled.
+     */
+    _connectScreenShield() {
+        if (!Main.screenShield)
+            return;
+        this._shieldActiveId = Main.screenShield.connect('active-changed', shield => {
+            if (shield.active && this._screensaverActive)
+                this._stopScreensaver(false, true);
+        });
+    }
+
     // ── Screensaver lifecycle ────────────────────────────────────────────────
 
     activateScreensaver() {
         if (this._screensaverActive)
+            return;
+
+        // mpv would play hidden behind the lock screen or a blanked screen
+        // (with audio) all night
+        if (Main.sessionMode.isLocked || Main.screenShield?.active)
             return;
 
         this._screensaverActive = true;
@@ -414,7 +462,10 @@ export default class VideoScreensaverExtension extends Extension {
         // Overlay actors are created lazily in _showError() if mpv fails to
         // launch, so the user always sees a meaningful error message.
 
-        this._startPlayer();
+        this._cancellable = new Gio.Cancellable();
+        this._startPlayer(this._cancellable).catch(e => {
+            console.error('[VideoScreensaver] Failed to start player:', e.message);
+        });
         this._connectInputSignals();
     }
 
@@ -423,6 +474,10 @@ export default class VideoScreensaverExtension extends Extension {
             return;
 
         this._screensaverActive = false;
+
+        // Abort a folder listing that may still be running
+        this._cancellable?.cancel();
+        this._cancellable = null;
 
         this._disconnectInputSignals();
 
@@ -442,7 +497,14 @@ export default class VideoScreensaverExtension extends Extension {
 
     // ── Player management ────────────────────────────────────────────────────
 
-    _startPlayer() {
+    /**
+     * List the videos folder asynchronously and launch mpv. A slow or hung
+     * disk/network folder never freezes the Shell; if the screensaver is
+     * dismissed meanwhile, `cancellable` aborts the listing.
+     *
+     * @param {Gio.Cancellable} cancellable
+     */
+    async _startPlayer(cancellable) {
         const folderPath = this._settings.get_string('videos-folder');
 
         if (!folderPath || folderPath.trim() === '') {
@@ -450,12 +512,24 @@ export default class VideoScreensaverExtension extends Extension {
             return;
         }
 
-        if (!GLib.file_test(folderPath, GLib.FileTest.IS_DIR)) {
-            this._showError(_('Videos folder not found.'), folderPath);
-            return;
+        let videoFiles;
+        try {
+            videoFiles = await this._listVideoFiles(folderPath, cancellable);
+        } catch (e) {
+            if (e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
+            if (e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND) ||
+                e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_DIRECTORY)) {
+                this._showError(_('Videos folder not found.'), folderPath);
+                return;
+            }
+            console.error('[VideoScreensaver] Error listing videos folder:', e.message);
+            videoFiles = [];
         }
 
-        const videoFiles = this._listVideoFiles(folderPath);
+        // Dismissed (or extension disabled) while the folder was being listed
+        if (cancellable.is_cancelled())
+            return;
 
         if (videoFiles.length === 0) {
             this._showError(_('No video files found in folder.'), folderPath);
@@ -469,31 +543,38 @@ export default class VideoScreensaverExtension extends Extension {
      * Enumerate all video files inside folderPath and return their absolute
      * paths sorted alphabetically. Supported extensions: mp4, mkv, webm, avi,
      * mov, m4v.
+     *
+     * @param {string} folderPath
+     * @param {Gio.Cancellable} cancellable
+     * @returns {Promise<string[]>}
      */
-    _listVideoFiles(folderPath) {
+    async _listVideoFiles(folderPath, cancellable) {
         const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v'];
         const dir = Gio.File.new_for_path(folderPath);
         const files = [];
 
-        try {
-            const enumerator = dir.enumerate_children(
-                'standard::name,standard::type',
-                Gio.FileQueryInfoFlags.NONE,
-                null
-            );
+        const enumerator = await dir.enumerate_children_async(
+            'standard::name,standard::type',
+            Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_DEFAULT,
+            cancellable
+        );
 
-            let fileInfo;
-            while ((fileInfo = enumerator.next_file(null)) !== null) {
-                if (fileInfo.get_file_type() !== Gio.FileType.REGULAR)
-                    continue;
-                const name = fileInfo.get_name();
-                const lower = name.toLowerCase();
-                if (VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext)))
-                    files.push(GLib.build_filenamev([folderPath, name]));
+        try {
+            let infos;
+            while ((infos = await enumerator.next_files_async(
+                50, GLib.PRIORITY_DEFAULT, cancellable)).length > 0) {
+                for (const fileInfo of infos) {
+                    if (fileInfo.get_file_type() !== Gio.FileType.REGULAR)
+                        continue;
+                    const name = fileInfo.get_name();
+                    const lower = name.toLowerCase();
+                    if (VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext)))
+                        files.push(GLib.build_filenamev([folderPath, name]));
+                }
             }
-            enumerator.close(null);
-        } catch (e) {
-            console.error('[VideoScreensaver] Error listing videos folder:', e.message);
+        } finally {
+            enumerator.close_async(GLib.PRIORITY_DEFAULT, null).catch(() => {});
         }
 
         files.sort();
@@ -534,6 +615,9 @@ export default class VideoScreensaverExtension extends Extension {
                 '--no-border',
                 '--ontop',
                 '--hwdec=auto',
+                // Don't inhibit idle: GNOME can still blank the screen and
+                // suspend as configured in Settings → Power
+                '--stop-screensaver=no',
                 // Disable all mpv keyboard/mouse bindings so keys like ESC and
                 // 'q' never exit fullscreen on their own. Dismissal is handled
                 // exclusively by the Shell's idle-monitor user-active watch.
@@ -559,29 +643,12 @@ export default class VideoScreensaverExtension extends Extension {
                 proc.init(null);
                 this._playerProcs.push(proc);
 
-                // Store PID of primary process for cross-reload detection
-                if (screenIdx === 0) {
-                    const pid = proc.get_identifier();
-                    if (pid) {
-                        const markerFile = Gio.File.new_for_path(this._markerFile);
-                        markerFile.replace_contents_async(
-                            new TextEncoder().encode(pid),
-                            null, false,
-                            Gio.FileCreateFlags.REPLACE_DESTINATION,
-                            null,
-                            (_f, res) => {
-                                try { _f.replace_contents_finish(res); } catch (_e) { /* ignore */ }
-                            }
-                        );
-                    }
-                }
-
                 // Watch for unexpected exit of each process
                 proc.wait_async(null, (_p, result) => {
                     try { _p.wait_finish(result); } catch (_e) { /* gone */ }
 
                     this._playerProcs = (this._playerProcs ?? []).filter(p => p !== proc);
-                    if (screenIdx === 0)
+                    if (this._playerProcs.length === 0)
                         this._clearMarkerFile();
 
                     // All processes exited while still active → show error
@@ -594,7 +661,7 @@ export default class VideoScreensaverExtension extends Extension {
                     }
                 });
             } catch (e) {
-                this._clearMarkerFile();
+                this._writeMarkerFile();
                 this._showError(
                     _('Failed to launch mpv: %s').format(e.message),
                     folderPath
@@ -602,6 +669,8 @@ export default class VideoScreensaverExtension extends Extension {
                 return;
             }
         }
+
+        this._writeMarkerFile();
     }
 
     /**
@@ -648,27 +717,64 @@ export default class VideoScreensaverExtension extends Extension {
         this._clearMarkerFile();
     }
 
-    /** Kill any orphaned mpv left over from a previous extension instance. */
-    _killOrphanedPlayer() {
-        if (!GLib.file_test(this._markerFile, GLib.FileTest.EXISTS))
+    /**
+     * Store the PIDs of all running mpv processes (one per line) so a later
+     * extension instance can clean them up after a crash or reload.
+     */
+    _writeMarkerFile() {
+        const pids = (this._playerProcs ?? [])
+            .map(p => p.get_identifier())
+            .filter(pid => pid);
+        if (pids.length === 0)
             return;
 
+        Gio.File.new_for_path(this._markerFile).replace_contents_async(
+            new TextEncoder().encode(pids.join('\n')),
+            null, false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION,
+            null,
+            (_f, res) => {
+                try { _f.replace_contents_finish(res); } catch (_e) { /* ignore */ }
+            }
+        );
+    }
+
+    /** Kill any orphaned mpv left over from a previous extension instance. */
+    _killOrphanedPlayer() {
         const file = Gio.File.new_for_path(this._markerFile);
         file.load_contents_async(null, (_f, res) => {
+            let pids = [];
             try {
-                const [ok, contents] = _f.load_contents_finish(res);
-                if (ok) {
-                    const pid = parseInt(new TextDecoder().decode(contents).trim(), 10);
-                    if (pid > 0) {
-                        try {
-                            // SIGTERM
-                            GLib.spawn_command_line_async(`kill ${pid}`);
-                        } catch (_e) { /* process already gone */ }
-                    }
-                }
-            } catch (_e) { /* ignore */ }
+                const [, contents] = _f.load_contents_finish(res);
+                pids = new TextDecoder().decode(contents)
+                    .split('\n')
+                    .map(line => parseInt(line, 10))
+                    .filter(pid => pid > 0);
+            } catch (_e) { /* no marker: nothing to clean up */ }
+
+            for (const pid of pids)
+                this._killIfMpv(pid);
 
             this._clearMarkerFile();
+        });
+    }
+
+    /**
+     * Send SIGTERM to pid only if it is still an mpv process. PIDs get reused,
+     * so a stale marker must never kill an unrelated program.
+     *
+     * @param {number} pid
+     */
+    _killIfMpv(pid) {
+        const comm = Gio.File.new_for_path(`/proc/${pid}/comm`);
+        comm.load_contents_async(null, (_f, res) => {
+            try {
+                const [, contents] = _f.load_contents_finish(res);
+                if (new TextDecoder().decode(contents).trim() !== 'mpv')
+                    return;
+                GLib.spawn_async(null, ['kill', String(pid)], null,
+                    GLib.SpawnFlags.SEARCH_PATH, null);
+            } catch (_e) { /* process already gone */ }
         });
     }
 

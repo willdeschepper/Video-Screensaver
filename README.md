@@ -102,6 +102,18 @@ glib-compile-schemas \
 gnome-extensions enable video-screensaver@willdeschepper.github.io
 ```
 
+### Testing without logging out (GNOME 49+)
+
+```bash
+./dev.sh
+```
+
+`dev.sh` installs the current sources and opens a nested Ubuntu GNOME Shell
+window (top bar and dock included) with this extension enabled, using its own
+settings profile (a copy of the extension's settings from your session).
+Maximize or resize the window to change the monitor size, e.g. to simulate an
+ultrawide screen. Extension logs appear in the terminal. Close the window to finish.
+
 ---
 
 ## Removal
@@ -179,6 +191,14 @@ cropped, never stretched) or choose what the bars show:
 
 Non-black colors and the blurred background use `--border-background`, which
 requires **mpv 0.38 or newer** with the default `gpu-next` video output.
+
+### Screen blank and suspend
+
+The screensaver does not keep the computer awake. GNOME still follows
+**Settings → Power**: after the *Screen Blank* delay the screen turns off
+(and locks, if screen lock is enabled) and the video player is stopped; the
+computer suspends if *Automatic Suspend* is on. With *Screen Blank* set to
+*Never* the video plays until there is input.
 
 ### Supported video formats
 
