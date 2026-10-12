@@ -105,14 +105,14 @@ gnome-extensions enable video-screensaver@willdeschepper.github.io
 ### Testing without logging out (GNOME 49+)
 
 ```bash
-./dev.sh            # nested GNOME Shell window, 2560x1080 (ultrawide)
-./dev.sh 1920x1080  # any other virtual monitor size
+./dev.sh
 ```
 
-`dev.sh` installs the current sources and opens a nested GNOME Shell window
-running only this extension, with its own settings profile (a copy of the
-extension's settings from your session). Extension logs appear in the terminal.
-Close the window to finish.
+`dev.sh` installs the current sources and opens a nested Ubuntu GNOME Shell
+window (top bar and dock included) with this extension enabled, using its own
+settings profile (a copy of the extension's settings from your session).
+Maximize or resize the window to change the monitor size, e.g. to simulate an
+ultrawide screen. Extension logs appear in the terminal. Close the window to finish.
 
 ---
 

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # dev.sh – Install the extension and test it in a nested GNOME Shell window,
 #          without logging out of the current session.
-# Usage: ./dev.sh [WIDTHxHEIGHT]   (default: 2560x1080, ultrawide)
+# Usage: ./dev.sh   (maximize/resize the window to change the monitor size,
+#                    e.g. to simulate an ultrawide screen)
 #
 # Requires GNOME Shell 49+ (gnome-shell --devkit, package mutter-dev-bin).
-# Runs only this extension, with its own settings profile in
+# Runs the Ubuntu session with only this extension added, using its own settings in
 # ~/.cache/video-screensaver-dev. Close the window (or Ctrl+C) to stop.
 
 set -euo pipefail
 
 UUID="video-screensaver@willdeschepper.github.io"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLUTION="${1:-2560x1080}"
 SETTINGS_PATH="/org/gnome/shell/extensions/video-screensaver/"
 DEV_CONFIG="${XDG_CACHE_HOME:-$HOME/.cache}/video-screensaver-dev"
 
@@ -27,11 +27,11 @@ fi
 settings="$(dconf dump "${SETTINGS_PATH}")"
 
 echo ""
-echo "Starting nested GNOME Shell (${RESOLUTION}). Logs from the extension appear below."
+echo "Starting nested GNOME Shell. Logs from the extension appear below."
 echo ""
 
-# Separate config dir: the nested shell gets its own dconf database, so only
-# this extension is loaded (none of the desktop's other extensions) and
+# Separate config dir: the nested shell gets its own dconf database, so it
+# loads only Ubuntu's built-in extensions (dock...) plus this one, and
 # nothing changed in there leaks into the real session.
 mkdir -p "${DEV_CONFIG}"
 export XDG_CONFIG_HOME="${DEV_CONFIG}"
@@ -42,5 +42,5 @@ exec dbus-run-session -- bash -c '
     printf "%s\n" "$1" | dconf load "$2"
     gsettings set org.gnome.shell enabled-extensions "[\"$3\"]"
     gsettings set org.gnome.shell welcome-dialog-last-shown-version "999"
-    exec gnome-shell --devkit --wayland --virtual-monitor "$4"
-' _ "${settings}" "${SETTINGS_PATH}" "${UUID}" "${RESOLUTION}"
+    exec gnome-shell --devkit --wayland --mode=ubuntu
+' _ "${settings}" "${SETTINGS_PATH}" "${UUID}"
