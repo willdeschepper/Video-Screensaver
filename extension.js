@@ -111,8 +111,17 @@ class VideoScreensaverIndicator extends PanelMenu.Button {
         this._slider.x_expand = true;
         this._slider.connect('notify::value', slider => {
             const minutes = Math.round(slider.value * 30);
-            settings.set_int('idle-timeout-minutes', minutes);
             timeoutLabel.label.text = _('Idle timeout: %d min').format(minutes);
+
+            // Save once the slider stops moving instead of on every pixel
+            if (this._saveTimeoutId)
+                GLib.source_remove(this._saveTimeoutId);
+            this._saveTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                this._saveTimeoutId = null;
+                if (settings.get_int('idle-timeout-minutes') !== minutes)
+                    settings.set_int('idle-timeout-minutes', minutes);
+                return GLib.SOURCE_REMOVE;
+            });
         });
         sliderItem.add_child(this._slider);
         this.menu.addMenuItem(sliderItem);
@@ -171,6 +180,10 @@ class VideoScreensaverIndicator extends PanelMenu.Button {
     }
 
     destroy() {
+        if (this._saveTimeoutId) {
+            GLib.source_remove(this._saveTimeoutId);
+            this._saveTimeoutId = null;
+        }
         if (this._settingsChangedId) {
             this._ext._getSettings().disconnect(this._settingsChangedId);
             this._settingsChangedId = null;
