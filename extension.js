@@ -598,29 +598,12 @@ export default class VideoScreensaverExtension extends Extension {
                 proc.init(null);
                 this._playerProcs.push(proc);
 
-                // Store PID of primary process for cross-reload detection
-                if (screenIdx === 0) {
-                    const pid = proc.get_identifier();
-                    if (pid) {
-                        const markerFile = Gio.File.new_for_path(this._markerFile);
-                        markerFile.replace_contents_async(
-                            new TextEncoder().encode(pid),
-                            null, false,
-                            Gio.FileCreateFlags.REPLACE_DESTINATION,
-                            null,
-                            (_f, res) => {
-                                try { _f.replace_contents_finish(res); } catch (_e) { /* ignore */ }
-                            }
-                        );
-                    }
-                }
-
                 // Watch for unexpected exit of each process
                 proc.wait_async(null, (_p, result) => {
                     try { _p.wait_finish(result); } catch (_e) { /* gone */ }
 
                     this._playerProcs = (this._playerProcs ?? []).filter(p => p !== proc);
-                    if (screenIdx === 0)
+                    if (this._playerProcs.length === 0)
                         this._clearMarkerFile();
 
                     // All processes exited while still active → show error
@@ -633,7 +616,7 @@ export default class VideoScreensaverExtension extends Extension {
                     }
                 });
             } catch (e) {
-                this._clearMarkerFile();
+                this._writeMarkerFile();
                 this._showError(
                     _('Failed to launch mpv: %s').format(e.message),
                     folderPath
@@ -641,6 +624,8 @@ export default class VideoScreensaverExtension extends Extension {
                 return;
             }
         }
+
+        this._writeMarkerFile();
     }
 
     /**
@@ -687,27 +672,64 @@ export default class VideoScreensaverExtension extends Extension {
         this._clearMarkerFile();
     }
 
-    /** Kill any orphaned mpv left over from a previous extension instance. */
-    _killOrphanedPlayer() {
-        if (!GLib.file_test(this._markerFile, GLib.FileTest.EXISTS))
+    /**
+     * Store the PIDs of all running mpv processes (one per line) so a later
+     * extension instance can clean them up after a crash or reload.
+     */
+    _writeMarkerFile() {
+        const pids = (this._playerProcs ?? [])
+            .map(p => p.get_identifier())
+            .filter(pid => pid);
+        if (pids.length === 0)
             return;
 
+        Gio.File.new_for_path(this._markerFile).replace_contents_async(
+            new TextEncoder().encode(pids.join('\n')),
+            null, false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION,
+            null,
+            (_f, res) => {
+                try { _f.replace_contents_finish(res); } catch (_e) { /* ignore */ }
+            }
+        );
+    }
+
+    /** Kill any orphaned mpv left over from a previous extension instance. */
+    _killOrphanedPlayer() {
         const file = Gio.File.new_for_path(this._markerFile);
         file.load_contents_async(null, (_f, res) => {
+            let pids = [];
             try {
-                const [ok, contents] = _f.load_contents_finish(res);
-                if (ok) {
-                    const pid = parseInt(new TextDecoder().decode(contents).trim(), 10);
-                    if (pid > 0) {
-                        try {
-                            // SIGTERM
-                            GLib.spawn_command_line_async(`kill ${pid}`);
-                        } catch (_e) { /* process already gone */ }
-                    }
-                }
-            } catch (_e) { /* ignore */ }
+                const [, contents] = _f.load_contents_finish(res);
+                pids = new TextDecoder().decode(contents)
+                    .split('\n')
+                    .map(line => parseInt(line, 10))
+                    .filter(pid => pid > 0);
+            } catch (_e) { /* no marker: nothing to clean up */ }
+
+            for (const pid of pids)
+                this._killIfMpv(pid);
 
             this._clearMarkerFile();
+        });
+    }
+
+    /**
+     * Send SIGTERM to pid only if it is still an mpv process. PIDs get reused,
+     * so a stale marker must never kill an unrelated program.
+     *
+     * @param {number} pid
+     */
+    _killIfMpv(pid) {
+        const comm = Gio.File.new_for_path(`/proc/${pid}/comm`);
+        comm.load_contents_async(null, (_f, res) => {
+            try {
+                const [, contents] = _f.load_contents_finish(res);
+                if (new TextDecoder().decode(contents).trim() !== 'mpv')
+                    return;
+                GLib.spawn_async(null, ['kill', String(pid)], null,
+                    GLib.SpawnFlags.SEARCH_PATH, null);
+            } catch (_e) { /* process already gone */ }
         });
     }
 
