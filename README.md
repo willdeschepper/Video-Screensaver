@@ -162,6 +162,23 @@ All settings are stored in GSettings under
 | `shuffle-videos` | boolean | `false` | Play videos in random order instead of alphabetical |
 | `lock-screen-after` | boolean | `false` | Lock the screen when dismissed |
 | `mute-video` | boolean | `false` | Play video without audio |
+| `fill-screen` | boolean | `false` | Zoom the video to cover the whole monitor, cropping the edges |
+| `background-mode` | `color` / `edge` / `blur` | `color` | What fills the bars around videos that do not fill the screen |
+| `background-color` | string (`#RRGGBB`) | `#000000` | Bar color when `background-mode` is `color` |
+
+### Fill screen and background
+
+On wide (e.g. ultrawide) monitors a video with a different aspect ratio gets
+bars around it. You can either enable **Fill screen** (the video is zoomed and
+cropped, never stretched) or choose what the bars show:
+
+- **Solid color** – any color, e.g. white for videos with a white background.
+- **Extend video edges** – repeats the video's border pixels outwards, so a
+  plain background looks continuous (uses the bundled `edge-fill.lua` mpv script).
+- **Blurred video** – a blurred copy of the video behind it.
+
+Non-black colors and the blurred background use `--border-background`, which
+requires **mpv 0.38 or newer** with the default `gpu-next` video output.
 
 ### Supported video formats
 

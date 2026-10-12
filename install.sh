@@ -77,6 +77,7 @@ SOURCE_FILES=(
     extension.js
     prefs.js
     stylesheet.css
+    edge-fill.lua
 )
 SOURCE_SCHEMA="schemas/org.gnome.shell.extensions.movie-screensaver.gschema.xml"
 
