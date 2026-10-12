@@ -447,8 +447,9 @@ export default class VideoScreensaverExtension extends Extension {
         if (this._screensaverActive)
             return;
 
-        // mpv would play hidden behind the lock screen (with audio) all night
-        if (Main.sessionMode.isLocked)
+        // mpv would play hidden behind the lock screen or a blanked screen
+        // (with audio) all night
+        if (Main.sessionMode.isLocked || Main.screenShield?.active)
             return;
 
         this._screensaverActive = true;
