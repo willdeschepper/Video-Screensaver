@@ -43,6 +43,8 @@ O usuário rodou `./dev.sh` e pediu análise do log, com ênfase em **não trava
 
 **T-05 dev.sh** — guardar se `$XDG_RUNTIME_DIR/gnome-shell-disable-extensions` existia; trocar `exec` por execução normal + `trap` em EXIT que remove o arquivo se não existia antes. Comentário: fechar pela janela (não Ctrl+C) é o caminho limpo.
 
+**T-06 dev.sh encerra mpv órfão** (achado no teste e2e) — se o shell aninhado cai, o mpv que ele abriu continua decodificando sem tela. `dev.sh` exporta `VIDEO_SCREENSAVER_DEV_SESSION=$$` e, na saída, encerra só os `mpv` cujo `/proc/<pid>/environ` tem essa marca (o mpv da sessão real nunca a tem).
+
 ## Verificação
 - `node --check extension.js`, `bash -n dev.sh`, schema dry-run.
 - Simulador (`./dev.sh`): "Start Screensaver Now" em pasta válida, pasta inexistente e pasta vazia → vídeo/erro corretos; log sem `JS ERROR`.

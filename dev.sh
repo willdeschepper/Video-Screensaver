@@ -44,10 +44,23 @@ export XDG_CONFIG_HOME="${DEV_CONFIG}"
 CRASH_GUARD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gnome-shell-disable-extensions"
 guard_existed=false
 [[ -e "${CRASH_GUARD}" ]] && guard_existed=true
+
+# Tag every process started by the nested session (mpv inherits it), so the
+# players it launched can be stopped if the nested shell dies without
+# cleaning up. The real session's mpv never carries this tag.
+export VIDEO_SCREENSAVER_DEV_SESSION="$$"
+
 cleanup() {
     if ! ${guard_existed}; then
         rm -f "${CRASH_GUARD}"
     fi
+    local pid
+    for pid in $(pgrep -x mpv || true); do
+        if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
+            | grep -qx "VIDEO_SCREENSAVER_DEV_SESSION=$$"; then
+            kill "${pid}" 2>/dev/null || true
+        fi
+    done
 }
 trap cleanup EXIT
 
