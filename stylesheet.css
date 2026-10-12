@@ -1,0 +1,36 @@
+/* ── Video Screensaver – Stylesheet ────────────────────────────────────────── */
+
+/* Fullscreen overlay covering each monitor */
+.video-screensaver-overlay {
+    background-color: #000000;
+}
+
+/* Error title */
+.video-screensaver-error-title {
+    font-size: 2.4em;
+    font-weight: bold;
+    color: #ffffff;
+    text-align: center;
+    padding-bottom: 12px;
+}
+
+/* Error body message */
+.video-screensaver-error-message {
+    font-size: 1.2em;
+    color: #ff6b6b;
+    text-align: center;
+    padding-bottom: 8px;
+}
+
+/* File path shown below the error */
+.video-screensaver-error-path {
+    font-size: 1.0em;
+    color: #aaaaaa;
+    text-align: center;
+    font-family: monospace;
+}
+
+/* Video path entry in the panel menu */
+.video-screensaver-path-entry {
+    min-width: 280px;
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Video Screensaver",
+  "description": "Video screensaver for GNOME using a local Video file",
+  "uuid": "video-screensaver@willdeschepper.github.io",
+  "shell-version": ["47", "48", "49", "50"],
+  "version": 2,
+  "url": ""
+}
