@@ -6,7 +6,7 @@
 #
 # Requires GNOME Shell 49+ (gnome-shell --devkit, package mutter-dev-bin).
 # Runs the Ubuntu session with only this extension added, using its own settings in
-# ~/.cache/video-screensaver-dev. Close the window (or Ctrl+C) to stop.
+# ~/.cache/video-screensaver-dev. Close the window to stop.
 
 set -euo pipefail
 
@@ -36,9 +36,24 @@ echo ""
 mkdir -p "${DEV_CONFIG}"
 export XDG_CONFIG_HOME="${DEV_CONFIG}"
 
+# GNOME Shell's crash guard: while this file exists a (re)starting shell
+# loads NO extensions. The nested shell shares XDG_RUNTIME_DIR with the real
+# session and only deletes it after 60 s or on a clean exit, so remove it if
+# the nested shell leaves it behind (e.g. Ctrl+C). Closing the window is the
+# clean way to stop.
+CRASH_GUARD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gnome-shell-disable-extensions"
+guard_existed=false
+[[ -e "${CRASH_GUARD}" ]] && guard_existed=true
+cleanup() {
+    if ! ${guard_existed}; then
+        rm -f "${CRASH_GUARD}"
+    fi
+}
+trap cleanup EXIT
+
 # A private D-Bus session keeps the nested shell from clashing with the
 # real one (both would claim org.gnome.Shell).
-exec dbus-run-session -- bash -c '
+dbus-run-session -- bash -c '
     printf "%s\n" "$1" | dconf load "$2"
     gsettings set org.gnome.shell enabled-extensions "[\"$3\"]"
     gsettings set org.gnome.shell welcome-dialog-last-shown-version "999"
