@@ -102,6 +102,18 @@ glib-compile-schemas \
 gnome-extensions enable video-screensaver@willdeschepper.github.io
 ```
 
+### Testing without logging out (GNOME 49+)
+
+```bash
+./dev.sh            # nested GNOME Shell window, 2560x1080 (ultrawide)
+./dev.sh 1920x1080  # any other virtual monitor size
+```
+
+`dev.sh` installs the current sources and opens a nested GNOME Shell window
+running only this extension, with its own settings profile (a copy of the
+extension's settings from your session). Extension logs appear in the terminal.
+Close the window to finish.
+
 ---
 
 ## Removal
